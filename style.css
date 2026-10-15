@@ -1,0 +1,3 @@
+#input-obfuscation-settings { margin-top: 8px; }
+#input-obfuscation-settings .input-obfuscation-status { opacity: 0.8; font-size: 0.9em; margin: 4px 0 0; }
+#input-obfuscation-settings .input-obfuscation-warning { color: var(--warning, #c99); }
