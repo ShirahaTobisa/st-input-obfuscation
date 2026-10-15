@@ -13,6 +13,49 @@ test('skipReason gates on toggle, interface, model and dry run', () => {
     assert.match(skipReason({ enabled: true, isChatCompletion: false }), /对话补全/);
     assert.match(skipReason({ enabled: true, isChatCompletion: true, model: 'gpt-4o' }), /不是 Gemini/);
     assert.equal(skipReason({ enabled: true, isChatCompletion: true, model: 'gemini-2.5-pro' }), '');
+    // 后台请求和代写不处理；不带工具的后处理档位会拆掉工具消息。
+    assert.match(skipReason({ enabled: true, isChatCompletion: true, model: 'gemini-2.5-pro', generationType: 'quiet' }), /后台请求/);
+    assert.match(skipReason({ enabled: true, isChatCompletion: true, model: 'gemini-2.5-pro', generationType: 'impersonate' }), /代写/);
+    for (const type of ['normal', 'continue', 'regenerate', 'swipe', undefined]) {
+        assert.equal(skipReason({ enabled: true, isChatCompletion: true, model: 'gemini-2.5-pro', generationType: type }), '', String(type));
+    }
+    for (const mode of ['merge', 'semi', 'strict', 'single', 'claude']) {
+        assert.match(skipReason({ enabled: true, isChatCompletion: true, model: 'gemini-2.5-pro', postProcessing: mode }), /Post-Processing/, mode);
+    }
+    for (const mode of ['', 'merge_tools', 'semi_tools', 'strict_tools', undefined]) {
+        assert.equal(skipReason({ enabled: true, isChatCompletion: true, model: 'gemini-2.5-pro', postProcessing: mode }), '', String(mode));
+    }
+});
+
+test('inserts the tool pair after trailing system/user prompts, right before the model turn', () => {
+    // 预设常把 Post-History 指令、深度 0 的注入放在聊天记录后面；工具对要落在它们之后，紧挨着模型回合。
+    const chat = [
+        { role: 'user', content: '真实输入' },
+        { role: 'system', content: '【注入】深度 0 的记忆' },
+        { role: 'system', content: 'Post-History 指令' },
+    ];
+    const result = obfuscateChat(chat, '真实输入', makeId);
+    assert.equal(result.applied, true);
+    assert.deepEqual(chat.map(m => m.role), ['user', 'system', 'system', 'assistant', 'tool']);
+    assert.equal(chat[0].content, PLACEHOLDER);
+});
+
+test('inserts the tool pair before a trailing assistant message (continue / prefill)', () => {
+    const chat = [
+        { role: 'user', content: '真实输入' },
+        { role: 'assistant', content: '写到一半的回复' },
+    ];
+    obfuscateChat(chat, '真实输入', makeId);
+    assert.deepEqual(chat.map(m => m.role), ['user', 'assistant', 'tool', 'assistant']);
+    assert.equal(chat[3].content, '写到一半的回复');
+});
+
+test('matches input that still carries \\r line endings and falls back to a random id', () => {
+    const chat = [{ role: 'user', content: '第一行\n第二行' }];
+    const result = obfuscateChat(chat, '第一行\r\n第二行', () => undefined);
+    assert.equal(result.applied, true);
+    assert.equal(result.movedChars, '第一行\n第二行'.length);
+    assert.match(toolCall(chat).tool_calls[0].id, /^call_[a-z0-9]{8,}$/);
 });
 
 test('moves the latest user input into a read_user_input tool result', () => {

@@ -5,6 +5,10 @@ export const TOOL_NAME = 'read_user_input';
 // 占位提示留在用户消息里，告诉模型去读工具结果；真实输入放进工具返回。
 export const PLACEHOLDER = '读取 read_user_input 的返回内容，作为本轮用户输入继续回复。';
 const TOOL_RESULT_MARK = '"source":"user_input"';
+// 酒馆「Prompt Post-Processing」里不带工具的档位：服务端会把工具消息改成普通用户消息、删掉工具调用，混淆会被拆掉。
+const POST_PROCESSING_WITHOUT_TOOLS = new Set(['claude', 'merge', 'semi', 'strict', 'single']);
+// 只对主聊天生效：总结、生图提示词、/gen 这类后台请求（quiet）和「代写」（impersonate）不动。
+const BACKGROUND_GENERATION_TYPES = new Set(['quiet', 'impersonate']);
 
 // 从一条对话补全消息的 content 里取纯文本（content 可能是字符串或多模态分段数组）。
 function readText(content) {
@@ -13,12 +17,20 @@ function readText(content) {
     return '';
 }
 
+export function isBackgroundGeneration(type) {
+    return BACKGROUND_GENERATION_TYPES.has(String(type || ''));
+}
+
 // 判断本轮是否应混淆；返回空串表示可以，否则返回不生效的原因（用于界面提示）。
-export function skipReason({ enabled, isChatCompletion, model, dryRun }) {
+export function skipReason({ enabled, isChatCompletion, model, dryRun, generationType, postProcessing }) {
     if (!enabled) return '已关闭';
     if (dryRun) return '仅预演请求，未发送';
+    if (isBackgroundGeneration(generationType)) return generationType === 'impersonate' ? '代写请求不处理' : '后台请求（总结、生图提示词等）不处理';
     if (!isChatCompletion) return '只支持对话补全（Chat Completion）接口';
     if (!/gemini/i.test(String(model || ''))) return '当前不是 Gemini 模型';
+    if (POST_PROCESSING_WITHOUT_TOOLS.has(String(postProcessing || ''))) {
+        return '接口设置里「Prompt Post-Processing」选了不带工具的档位，会拆掉工具消息；请改成 None 或带 with tools 的档位';
+    }
     return '';
 }
 
@@ -33,11 +45,15 @@ export function buildUserInputToolMessages(text, callId) {
 /**
  * 原地改写待发送的 chat 数组：把 realInput 这段真实输入从用户消息移到工具结果。
  * 只动能匹配到 realInput 的那一条用户消息，其余（记忆注入、世界书、图片分段等）原样保留。
+ * @param {object[]} chat 待发送的消息数组
+ * @param {string} realInput 本轮真实输入原文
+ * @param {() => (string|undefined)} [makeId] 生成调用编号；返回空时用随机数兜底
  * @returns {{ applied: boolean, reason?: string, movedChars?: number }}
  */
 export function obfuscateChat(chat, realInput, makeId) {
     if (!Array.isArray(chat) || !chat.length) return { applied: false, reason: '没有聊天消息' };
-    const real = String(realInput ?? '').trim();
+    // 酒馆发请求前会删掉 \r，这里同样删掉，免得粘贴来的文本匹配不上。
+    const real = String(realInput ?? '').replace(/\r/g, '').trim();
     if (!real) return { applied: false, reason: '没有找到本轮用户输入' };
     // 已经处理过（例如事件重复触发）就不再动。
     if (chat.some(message => message?.role === 'tool' && typeof message.content === 'string' && message.content.includes(TOOL_RESULT_MARK))) {
@@ -64,7 +80,12 @@ export function obfuscateChat(chat, realInput, makeId) {
         target.content = [{ type: 'text', text: replacedText }, ...nonText];
     }
 
-    const callId = `call_${typeof makeId === 'function' ? makeId() : Math.random().toString(36).slice(2)}`;
-    chat.splice(index + 1, 0, ...buildUserInputToolMessages(real, callId));
+    // 插入位置：跳过紧跟在用户消息后面的系统/用户消息（Post-History 指令、深度 0 的注入等），
+    // 让工具对紧挨着模型回合，工具结果不会和后面的指令被合并进同一个回合；
+    // 末尾是 AI 消息（续写、预填）时插在它前面。
+    let insertAt = index + 1;
+    while (insertAt < chat.length && (chat[insertAt]?.role === 'user' || chat[insertAt]?.role === 'system')) insertAt += 1;
+    const id = (typeof makeId === 'function' && makeId()) || `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    chat.splice(insertAt, 0, ...buildUserInputToolMessages(real, `call_${id}`));
     return { applied: true, movedChars: real.length };
 }
