@@ -1,4 +1,5 @@
 import { install, KEY } from './src/runtime.js';
+import { getRegexedString, regex_placement } from '../../regex/engine.js';
 
 const getContext = () => SillyTavern.getContext();
 
@@ -40,7 +41,8 @@ const setEnabled = (enabled, save = true) => {
     showStatus(enabled ? '已开启，等待主聊天请求' : '已关闭', false);
 };
 
-install(getContext, window, showStatus);
+// 酒馆发送前会对最新用户消息跑“仅格式提示词”的正则（深度 0），匹配原话时按同样规则先改写一遍。
+install(getContext, window, showStatus, (text) => getRegexedString(text, regex_placement.USER_INPUT, { isPrompt: true, depth: 0 }));
 setEnabled(getContext().extensionSettings[KEY].enabled, false);
 checkbox.addEventListener('change', () => setEnabled(checkbox.checked));
 wand.addEventListener('click', () => setEnabled(!getContext().extensionSettings[KEY].enabled));

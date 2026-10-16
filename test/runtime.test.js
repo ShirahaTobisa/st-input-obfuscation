@@ -13,7 +13,7 @@ function fakeEvents() {
     };
 }
 
-function setup({ model = 'gemini-2.5-pro', mainApi = 'openai', postProcessing = '', enabled = true, crypto = {}, modelThrows = false } = {}) {
+function setup({ model = 'gemini-2.5-pro', mainApi = 'openai', postProcessing = '', enabled = true, crypto = {}, modelThrows = false, transform } = {}) {
     const events = fakeEvents();
     const context = {
         eventSource: events,
@@ -26,7 +26,7 @@ function setup({ model = 'gemini-2.5-pro', mainApi = 'openai', postProcessing = 
     };
     const toasts = [];
     const statuses = [];
-    install(() => context, { crypto, toastr: { warning: (text, title) => toasts.push({ text, title }) } }, (detail, warning) => statuses.push({ detail, warning }));
+    install(() => context, { crypto, toastr: { warning: (text, title) => toasts.push({ text, title }) } }, (detail, warning) => statuses.push({ detail, warning }), transform);
     const send = async ({ type = 'normal', dryRun = false, chat = [{ role: 'user', content: '真实输入' }] } = {}) => {
         await events.emit('generation_started', type, {}, dryRun);
         await events.emit('chat_completion_prompt_ready', { chat, dryRun });
@@ -114,4 +114,22 @@ test('an unexpected error is reported instead of swallowed', async () => {
     const { send, toasts } = setup({ modelThrows: true });
     await send();
     assert.match(toasts[0]?.text || '', /插件出错.*boom/);
+});
+
+test('a prompt-only regex rewrite of the input is still matched (same rewrite applied before matching)', async () => {
+    const { send, toasts, statuses } = setup({ transform: (text) => `“${text}”` });
+    const chat = await send({ chat: [{ role: 'user', content: '“真实输入”' }] });
+    assert.deepEqual(chat.map((m) => m.role), ['user', 'assistant', 'tool']);
+    assert.equal(JSON.parse(chat[2].content).text, '“真实输入”');
+    assert.deepEqual(toasts, []);
+    assert.match(statuses.at(-1).detail, /已混淆/);
+});
+
+test('a failing or no-op rewrite falls back to the raw input', async () => {
+    for (const transform of [() => { throw new Error('regex engine missing'); }, (text) => text]) {
+        const { send, toasts } = setup({ transform });
+        const chat = await send();
+        assert.equal(chat.length, 3);
+        assert.deepEqual(toasts, []);
+    }
 });

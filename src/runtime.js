@@ -13,7 +13,8 @@ function latestUserInput(context) {
     return '';
 }
 
-export function install(getContext, host, showStatus) {
+// transformInput：把原话按酒馆发送前的规则改写（index.js 传入“仅格式提示词”的正则），匹配时先用改写后的，再退回原文。
+export function install(getContext, host, showStatus, transformInput = (text) => text) {
     const context = getContext();
     const { eventSource: events, eventTypes: types } = context;
     context.extensionSettings[KEY] ??= { enabled: false };
@@ -43,7 +44,14 @@ export function install(getContext, host, showStatus) {
             });
             if (reason) return warn(`本轮未生效：${reason}`);
             // crypto.randomUUID 只在 HTTPS 或 localhost 下存在；取不到时由 obfuscateChat 用随机数兜底。
-            const result = obfuscateChat(eventData.chat, latestUserInput(ctx), () => host.crypto?.randomUUID?.());
+            const raw = latestUserInput(ctx);
+            let transformed = raw;
+            try { transformed = String(transformInput(raw) ?? raw); } catch (_) { /* 改写失败就按原文找 */ }
+            let result = { applied: false, reason: '没有找到本轮用户输入' };
+            for (const text of [...new Set([transformed, raw].filter(Boolean))]) {
+                result = obfuscateChat(eventData.chat, text, () => host.crypto?.randomUUID?.());
+                if (result.applied || result.reason === '本轮已处理') break;
+            }
             if (result.applied) showStatus(`已混淆：本轮输入（${result.movedChars} 字）已作为工具结果传递`, false);
             else warn(`本轮未生效：${result.reason}`);
         } catch (error) {
