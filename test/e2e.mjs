@@ -11,7 +11,7 @@ import path from 'node:path';
 
 const ST_DIR = process.env.ST_DIR || 'D:/sillytavern';
 const CHROME_PATH = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const PLAYWRIGHT_ROOT = process.env.PLAYWRIGHT_ROOT || 'D:/tools/claude/projects/rp-hub';
+const PLAYWRIGHT_ROOT = process.env.PLAYWRIGHT_ROOT || process.cwd();
 const ST_PORT = Number(process.env.ST_PORT || 8011);
 const MOCK_PORT = Number(process.env.MOCK_PORT || 8778);
 const PANEL = '#input-obfuscation-settings';
